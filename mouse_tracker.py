@@ -12,7 +12,6 @@ class Mouse:
 
         # trail: deque of (type, cx, cy, extra...)
         # type: "move" | "click" | "scroll"
-        self.trail = deque(maxlen=12000)
         self.event_queue = queue.Queue()
         self.listener = mouse.Listener(
             on_move=lambda x, y: self.event_queue.put(("move", x, y)),
@@ -28,9 +27,6 @@ class Mouse:
         self.x = x
         self.y = y
         mouse.Controller().position = (x, y)
-
-    def clear(self):
-        self.trail.clear()
 
 
 class UIConfig:
@@ -50,7 +46,8 @@ class MouseUI:
         self.mouse = Mouse()
         self.config = UIConfig()
 
-        self.running = False
+        self.trail_en = False
+        self.trail = deque(maxlen=1024)
         self.mouse_on_canvas = False
 
         self.config_ui()
@@ -118,8 +115,8 @@ class MouseUI:
         ttk.Label(ctrl, textvariable=self.clip_var, foreground="#ff7043").pack(side=tk.RIGHT, padx=(10, 0))
 
     def clear(self):
-        self.running = False
-        self.mouse.clear()
+        self.trail.clear()
+        self.trail_en = False
         self.canvas.delete("all")
         self.lbl_count.config(text="Trail: 0")
 
@@ -144,26 +141,25 @@ class MouseUI:
 
             etype = ev[0]
 
-            if etype == "move" and self.running:
+            if etype == "move":
                 _, sx, sy = ev
+                cx, cy = self._to_canvas(sx, sy)
 
-                if self.mouse_on_canvas:
-                    cx, cy = self._to_canvas(sx, sy)
-                    self.mouse.trail.append(("move", cx, cy))
-                    self.lbl_screen.config(text=f"Screen: ({sx}, {sy})")
-                    self.lbl_event.config(text="Event: move")
-                else:
-                    self.lbl_screen.config(text=f"Screen: ({sx}, {sy})")
+                if self.trail_en:
+                    if self.mouse_on_canvas:
+                        self.trail.append(("move", cx, cy))
+                    else:
+                        self.trail.append(("outCanvas", sx, sy))
 
+                self.lbl_event.config(text="Event: move")
+                self.lbl_screen.config(text=f"Screen: ({sx}, {sy})")
                 dirty = True
 
             elif etype == "click" and self.mouse_on_canvas:
-                self.running = True
+                self.trail_en = True
                 _, sx, sy, btn, pressed = ev
 
                 if self.mouse_on_canvas:
-                    cx, cy = self._to_canvas(sx, sy)
-                    self.mouse.trail.append(("click", cx, cy, btn, pressed))
                     state = "down" if pressed else "up"
                     self.lbl_event.config(text=f"Event: {btn} {state}")
                     self.lbl_screen.config(text=f"Screen: ({sx}, {sy})")
@@ -176,8 +172,6 @@ class MouseUI:
                 _, sx, sy, dx, dy = ev
 
                 if self.mouse_on_canvas:
-                    cx, cy = self._to_canvas(sx, sy)
-                    self.mouse.trail.append(("scroll", cx, cy, dx, dy))
                     self.lbl_event.config(text=f"Event: scroll ({dx:+d},{dy:+d})")
                     self.lbl_screen.config(text=f"Screen: ({sx}, {sy})")
                 else:
@@ -185,14 +179,14 @@ class MouseUI:
 
                 dirty = True
 
-        if dirty:
-            self.lbl_count.config(text=f"Trail: {len(self.mouse.trail)}")
+        self.lbl_count.config(text=f"Trail: {len(self.trail)}")
+        if dirty and self.trail_en:
             self.canvas.delete("trail", "marker", "cursor")
             self.draw()
 
     def draw(self):
         self.canvas.delete("all")
-        trail = list(self.mouse.trail)
+        trail = list(self.trail)
         if not trail:
             return
 
@@ -221,8 +215,12 @@ class MouseUI:
                 self.canvas.create_oval(x - r, y - r, x + r, y + r, fill=self.config.scroll_color, outline="", tags="marker")
                 prev_x, prev_y = x, y
 
+            elif ev[0] == "outCanvas":
+                _, sx, sy = ev
+                prev_x, prev_y = sx, sy
+
     def on_close(self):
-        self.running = False
+        self.trail_en = False
         self.mouse.listener.stop()
         self.ui.destroy()
 
